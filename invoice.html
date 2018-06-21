@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.5.0/Chart.min.js"> </script>
+  <style>
+.split {
+    height: 100%;
+    width: 50%;
+    position: fixed;
+    z-index: 1;
+    top: 0;
+    overflow-x: hidden;
+    padding-top: 20px;
+}
+
+.left {
+    left: 0;
+}
+
+.right {
+    right: 0;
+}
+</style>
+</head>
+<body>
+  <div class="split left">
+  <canvas id="line-chart"></canvas>
+</div>
+<div class="split right">
+  <canvas id="bar-chart"></canvas>
+</div>
+<script>
+new Chart(document.getElementById("line-chart"), {
+  type: 'line',
+  data: {
+    labels: ['week1','week2','week3','week4','week5','week6'],
+    datasets: [{
+        data: [200,500,1500,1700,2000,2200],
+        label: "Dollars",
+        borderColor: "#3e95cd",
+        fill: false
+      }
+    ]
+  },
+  options: {
+    title: {
+      display: true,
+      text: 'Cash Flow Estimate'
+    }
+  }
+});
+new Chart(document.getElementById("bar-chart"), {
+    type: 'bar',
+    data: {
+      labels: ["on-time", "delay(0-10)", "delay(0-15)", "delay(16-30)", "delay(30+)"],
+      datasets: [
+        {
+          label: "Payment Estimates",
+          backgroundColor: ["#3e95cd", "#8e5ea2","#3cba9f","#e8c3b9","#c45850"],
+          data: [20,10,2,15,8]
+        }
+      ]
+    },
+    options: {
+      legend: { display: false },
+      title: {
+        display: true,
+        text: 'Payment Estimates'
+      }
+    }
+});
+</script>
+</body>
+</html
