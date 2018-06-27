@@ -8,13 +8,13 @@ from sklearn.feature_selection import RFE
 import math
 import pickle
 
-saved_model_file = 'finalized_model.sav'
+lr_model_file = 'lr_model.sav'
 model = None
 X_test = None
 Y_test = None
-X_train = None
-Y_train = None
+
 cust_dict = None
+cust_avg_settled = None
 
 
 def main(argv):
@@ -39,6 +39,7 @@ def main(argv):
 
 
 def train(trainfile):
+    global model
     dataset = pd.read_csv(trainfile)
     dataset_new = extract_features(dataset)
     array = dataset_new.values
@@ -53,7 +54,7 @@ def train(trainfile):
     lm.fit(X_train, Y_train)
     print("done training...")
     model_stats(lm,X_validation,Y_validation)
-    pickle.dump(lm, open(saved_model_file, 'wb'))
+    pickle.dump(lm, open(lr_model_file, 'wb'))
     print("model saved")
     return lm
 
@@ -66,39 +67,31 @@ def model_stats(lm,X_validation, Y_validation):
 
 
 def extract_features(dataset):
+    global cust_avg_settled
+    global cust_dict
     grouped = dataset.groupby('customerID', as_index=False)
     invoice_count = grouped.agg({"invoiceNumber": "count"})
     invoice_count.columns = ['customerID', 'total']
 
-    delayed = dataset[(dataset.DaysLate > 0)]
-    delayed = delayed.groupby('customerID', as_index=False)
-    delayed_invoice_count = delayed.agg({'invoiceNumber': 'count'})
-    delayed_invoice_count.columns = ['customerID', 'delayed']
+    custlist = invoice_count['customerID'].tolist()
+    cust_dict = {x: custlist.index(x) for x in custlist}
 
-    delayed_days_avg = delayed.agg({'DaysLate': 'mean'})
-    delayed_days_avg.columns = ['customerID', 'avgDaysDelayed']
+    df = pd.DataFrame(list(cust_dict.items()), columns=['customerID', 'code'])
+
+    df.to_csv("customer_map.csv", index=0)
 
     settled_days_avg = grouped.agg({'DaysToSettle': 'mean'})
     settled_days_avg.columns = ['customerID', 'avgDaysToSettle']
 
-    invoice_count_stats = pd.merge(invoice_count, delayed_invoice_count, on='customerID', how='left').fillna(0)
-    invoice_count_stats = invoice_count_stats.sort_values('customerID')
-    invoice_count_stats['paid'] = invoice_count_stats['total'] - invoice_count_stats['delayed']
-    invoice_count_stats['delayRatio'] = (invoice_count_stats['delayed'] / invoice_count_stats['total'])
+    settled_days_avg.to_csv("avg_days.csv", index=0)
+    cust_avg_settled = pd.Series(settled_days_avg.avgDaysToSettle.values, index=settled_days_avg.customerID).to_dict()
+    dataset_enriched = calc_features(dataset)
+    return dataset_enriched
 
-    paid_tot = grouped.agg({"InvoiceAmount": "sum"})
-    paid_tot.columns = ['customerID', 'totalAmt']
-    delayed_tot = delayed.agg({"InvoiceAmount": "sum"})
-    delayed_tot.columns = ['customerID', 'delayedAmt']
 
-    invoice_amt_stats = pd.merge(paid_tot, delayed_tot, on='customerID', how='left').fillna(0)
-    invoice_amt_stats['paidAmt'] = invoice_amt_stats['totalAmt'] - invoice_amt_stats['delayedAmt']
-    invoice_amt_stats['delayAmtRatio'] = (invoice_amt_stats['delayedAmt'] / invoice_amt_stats['totalAmt'])
-
-    payer_stats = pd.merge(invoice_count_stats, invoice_amt_stats, on="customerID", how='left')
-    payer_stats = pd.merge(payer_stats, delayed_days_avg, on="customerID", how="left").fillna(0)
-    payer_stats = pd.merge(payer_stats, settled_days_avg, on="customerID", how="left").fillna(0)
-
+def calc_features(dataset):
+    global cust_avg_settled
+    global cust_dict
     dataset['invoicemonth'] = pd.to_datetime(dataset['InvoiceDate']).dt.month
     dataset['invoicedate'] = pd.to_datetime(dataset['InvoiceDate']).dt.day
     dataset['invoiceday'] = pd.to_datetime(dataset['InvoiceDate']).dt.weekday
@@ -106,32 +99,23 @@ def extract_features(dataset):
     dataset['firsthalfmonth'] = np.where(dataset['invoicedate'] < 16, 1, 0)
     paperless = {'Paper': 0, 'Electronic': 1}
     dataset['paperless'] = dataset['PaperlessBill'].map(paperless)
+    if cust_avg_settled is None:
+        cust_avg_df = pd.read_csv('avg_days.csv')
+        cust_avg_settled = pd.Series(cust_avg_df.avgDaysToSettle.values, index=cust_avg_df.customerID).to_dict()
 
-    dataset_new = pd.merge(dataset, payer_stats, on='customerID', how='left').fillna(0)
+    dataset['avgDaysToSettle'] = dataset['customerID'].map(cust_avg_settled)
+    if cust_dict is None:
+        cust_map_df = pd.read_csv('customer_map.csv')
+        cust_dict = pd.Series(cust_map_df.code.values, index=cust_map_df.customerID).to_dict()
 
-    custlist = payer_stats['customerID'].tolist()
-    cust_dict = {x: custlist.index(x) for x in custlist}
-    dataset_new['cust'] = dataset_new['customerID'].map(cust_dict)
-    dataset_new = dataset_new[['cust', 'InvoiceAmount', 'total', 'totalAmt', 'avgDaysToSettle', 'DaysToSettle']]
-
-    cols = dataset_new.columns
-    dataset_new[cols] = dataset_new[cols].apply(pd.to_numeric)
-
-    return dataset_new
+    dataset['cust'] = dataset['customerID'].map(cust_dict)
+    dataset_final = dataset[['cust', 'InvoiceAmount', 'invoicemonth', 'monthend', 'firsthalfmonth', 'paperless', 'avgDaysToSettle','DaysToSettle']]
+    cols = dataset_final.columns
+    dataset_final[cols] = dataset_final[cols].apply(pd.to_numeric)
+    return dataset_final
 
 
-def calc_from_features(dataset):
-
-    dataset['invoicemonth'] = pd.to_datetime(dataset['InvoiceDate']).dt.month
-    dataset['invoicedate'] = pd.to_datetime(dataset['InvoiceDate']).dt.day
-    dataset['invoiceday'] = pd.to_datetime(dataset['InvoiceDate']).dt.weekday
-    dataset['monthend'] = np.where(dataset['invoicedate'] > 27, 1, 0)
-    dataset['firsthalfmonth'] = np.where(dataset['invoicedate'] < 16, 1, 0)
-    paperless = {'Paper': 0, 'Electronic': 1}
-    dataset['paperless'] = dataset['PaperlessBill'].map(paperless)
-    return dataset
-
-def auto_extract_feature():
+def auto_extract_feature(X_train,Y_train):
     rfe = RFE(model, 4)
     fit = rfe.fit(X_train, Y_train)
     print("Num Features: %d" % fit.n_features_)
@@ -139,18 +123,28 @@ def auto_extract_feature():
     print("Feature Ranking: %s" % fit.ranking_)
 
 
-def file_to_list(filename):
-    invoices = pd.read_csv(filename)
-    invoices_new = calc_from_features(invoices)
-
-    return []
+def file_to_array(filename):
+    invoice_data = pd.read_csv(filename)
+    invoice_data_enriched = calc_features(invoice_data)
+    array = invoice_data_enriched.values
+    n = len(invoice_data_enriched.columns)
+    X = array[:, 0:n - 1]
+    return X
 
 
 def predict(datafile):
-    x_value = file_to_list(datafile)
-    loaded_model = pickle.load(open(saved_model_file, 'rb'))
-    y_value=loaded_model.predict(x_value)
-    to_json(x_value,y_value)
+    invoice_data = pd.read_csv(datafile)
+    invoice_data_enriched = calc_features(invoice_data)
+    array = invoice_data_enriched.values
+    n = len(invoice_data_enriched.columns)
+    x_value = array[:, 0:n - 1]
+
+    loaded_model = pickle.load(open(lr_model_file, 'rb'))
+    y_value = loaded_model.predict(x_value)
+    print("prediction: ")
+    print(y_value)
+    invoice_data['predicted'] = y_value
+    print(invoice_data.head(1))
 
 
 def to_json():
